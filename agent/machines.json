@@ -1,0 +1,23 @@
+{
+  "machine-a": {
+    "IP": "ip_address",
+    "Ports": [4102, 4061],
+    "cores": 8,
+    "memory_gb": 32,
+    "In-use": false
+  },
+  "machine-b": {
+    "IP": "ip_address",
+    "Ports": [4102, 4061],
+    "cores": 16,
+    "memory_gb": 64,
+    "In-use": false
+  },
+  "machine-c": {
+    "IP": "ip_address",
+    "Ports": [4102, 4061],
+    "cores": 4,
+    "memory_gb": 16,
+    "In-use": false
+  }
+}
