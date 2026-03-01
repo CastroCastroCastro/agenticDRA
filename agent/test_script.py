@@ -13,14 +13,22 @@ class TestScript(unittest.TestCase):
     def setUpClass(cls):
         from script import Script
 
-        cls.Script = Script
+        class StubbedScript(Script):
+            def _read_rows_from_postgres(self, dsn):
+                return [
+                    ("machine-a", "127.0.0.1", [4102], 8, 32, False),
+                    ("machine-b", "127.0.0.2", [4061], 16, 153, False),
+                    ("machine-c", "127.0.0.3", [5000], 4, 16, False),
+                ]
+
+        cls.Script = StubbedScript
         cls.in_use_field = "In-use"
 
     def setUp(self):
         self.script = self.Script()
 
-    def test_read_machines_returns_non_empty_list(self):
-        self.assertIsInstance(self.script.machines, list)
+    def test_read_machines_returns_non_empty_map(self):
+        self.assertIsInstance(self.script.machines, dict)
         self.assertGreater(len(self.script.machines), 0)
 
     def test_read_machines_structure_has_expected_keys(self):
@@ -37,7 +45,7 @@ class TestScript(unittest.TestCase):
             self.assertIsInstance(machine.get("cores"), int)
             self.assertIsInstance(machine.get("memory_gb"), int)
 
-    def test_get_available_machines_filters_only_zero_memory(self):
+    def test_get_available_machines_excludes_in_use_and_zero_memory(self):
         machine_names = list(self.script._machines_by_name)
         self.assertGreaterEqual(len(machine_names), 2)
         machine_one, machine_two = machine_names[:2]
@@ -48,37 +56,39 @@ class TestScript(unittest.TestCase):
         available = self.script._get_available_machines()
 
         self.assertNotIn(machine_one, available)
-        self.assertIn(machine_two, available)
+        self.assertNotIn(machine_two, available)
         self.assertTrue(all(m.get("memory_gb", 0) > 0 for m in available.values()))
+        self.assertTrue(all(not m.get(self.in_use_field, False) for m in available.values()))
 
     def test_parse_machines_merges_all_entries(self):
-        machines_data = [
-            {
-                "machine-a": {
-                    "IP": "127.0.0.1",
-                    "Ports": [4102],
-                    "cores": 8,
-                    "memory_gb": 32,
-                    self.in_use_field: False,
-                }
+        machines_data = {
+            "machine-a": {
+                "IP": "127.0.0.1",
+                "Ports": [4102],
+                "cores": 8,
+                "memory_gb": 32,
+                self.in_use_field: False,
             },
-            {
-                "machine-b": {
-                    "IP": "127.0.0.2",
-                    "Ports": [4061],
-                    "cores": 16,
-                    "memory_gb": 0,
-                    self.in_use_field: True,
-                }
+            "machine-b": {
+                "IP": "127.0.0.2",
+                "Ports": [4061],
+                "cores": 16,
+                "memory_gb": 0,
+                self.in_use_field: True,
             },
-        ]
+        }
 
         parsed = self.script._parse_machines(machines_data)
-        print(f"Parsed machines with details: {parsed}")
 
         self.assertEqual(set(parsed), {"machine-a", "machine-b"})
         self.assertEqual(parsed["machine-a"]["memory_gb"], 32)
         self.assertEqual(parsed["machine-b"]["memory_gb"], 0)
+
+    def test_requires_postgres_scheme_for_metadata_url(self):
+        from script import Script
+
+        with self.assertRaisesRegex(ValueError, "must use postgresql:// or postgres://"):
+            Script(metadata_db_url="sqlite:///tmp/machines.db")
 
 
 if __name__ == "__main__":
