@@ -10,7 +10,7 @@
     "IP": "ip_address",
     "Ports": [4102, 4061],
     "cores": 16,
-    "memory_gb": 64,
+    "memory_gb": 153,
     "In-use": false
   },
   "machine-c": {
