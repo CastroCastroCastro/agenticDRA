@@ -1,0 +1,2 @@
+# Project dependencies (agent uses PostgreSQL via psycopg)
+psycopg[binary]==3.3.*
