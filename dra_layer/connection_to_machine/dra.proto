@@ -1,0 +1,87 @@
+syntax = "proto3";
+
+package dra;
+
+service DRAService {
+  // Turns on machine when connected
+  rpc PowerOnMachine(PowerOnRequest) returns (PowerOnResponse);
+  // Turns off machine (e.g. on server interrupt)
+  rpc PowerOffMachine(PowerOffRequest) returns (PowerOffResponse);
+
+  // Deployment: consumes resources, gets GB from metadata store, unzips, calls psutil, updates DB state to ON
+  rpc DeployApp(DeployRequest) returns (DeployResponse);
+  // Undeployment: frees resources used during deployment (GB, cores, etc.)
+  rpc UndeployApp(UndeployRequest) returns (UndeployResponse);
+  // Gets machine info (CPU cores, GB) via psutil from current machine
+  rpc GetMachineInfo(Empty) returns (MachineInfoResponse);
+}
+
+message Empty {}
+
+message DeployRequest {
+  bytes zip_file = 1;
+}
+
+enum MachineState {
+  MACHINE_STATE_UNSPECIFIED = 0;
+  OFF = 1;
+  ON = 2;
+  ERROR = 3;
+}
+
+enum WorkloadState {
+  WORKLOAD_STATE_UNSPECIFIED = 0;
+  STOPPED = 1;
+  RUNNING = 2;
+  DONE = 3;
+}
+
+message DeployResponse {
+  bool success = 1;
+  string app_workload_id = 2;
+  float cpu_amt_used = 3;
+  float gb_mem_amt_used = 4;
+  string deploy_status = 5;
+}
+
+message UndeployRequest {
+  string app_workload_id = 1;
+}
+
+message UndeployResponse {
+  bool success = 1;
+  float freed_gb_app = 2;
+  float cpu_used_app = 3;
+  float available_gb_machine = 4;
+  float available_cores_machine = 5;
+}
+
+message MachineInfoResponse {
+  MachineState machine_state = 1;
+  float total_gb_used = 2;
+  float available_gb_machine = 3;
+  int32 total_cpu_cores = 4;
+  float available_cores_machine = 5;
+  repeated RunningWorkload app_workloads = 6;
+}
+
+message RunningWorkload {
+  string app_workload_id = 1;
+  float gb_used_workload = 2;
+  float cpu_used_workload = 3;
+  WorkloadState status_app_workload = 4;
+}
+
+message PowerOnRequest {}
+
+message PowerOnResponse {
+  bool acceptance = 1;
+  MachineState machine_state = 2;
+}
+
+message PowerOffRequest {}
+
+message PowerOffResponse {
+  bool acceptance = 1;
+  MachineState machine_state = 2;
+}
