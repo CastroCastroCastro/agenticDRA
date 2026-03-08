@@ -1,0 +1,86 @@
+idl proto
+
+service DRAService {
+
+	rpc PowerOnMachine(PowerOnRequest) returns PowerOnResponse // Turns on machine when connected
+	rpc PowerOffMachine(PowerOffRequest) returns PowerOffResponse // Turns off machine (In an server interrupt)
+	
+	rpc DeployApp(DeployRequest) returns DeployResponse // Does the Deployment Process (Consumes the Resources, gets the GB from the metadata store (from DB, etc.))
+	// Unzip, calls psutil (gets GB), update db statse to put on ON
+	rpc UndeployApp(UndeployRequest) returns UndeployResponse // Does the Undeployment Process // Frees resources used during deployment (Frees GB, cores, etc.)
+	rpc GetMachineInfo(Empty) returns MachineInfoResponse // Gets the info from a specific machine when freed or using (CPU Cores, GB) - Req is None since just need to fetch Info from current machine that deployment is occuring on
+	// via psutil.
+
+}
+
+message DeployRequest {
+	bytes zip_file = 1;
+	// Possible/maybe: string app_workload_id = 2; // Way to track Specific Application being deployed on machine to know why amount of resources being used up if high or low.
+	// Questionable: Req Resources needed to run workload??
+	// Possible: Instead type_of_application
+}
+
+enum MachineState {
+	OFF = 1;
+	ON = 2;
+	ERROR = 3;
+}
+
+enum WorkloadState {
+	STOPPED = 1;
+	RUNNING = 2; 
+	DONE = 3;
+}
+
+message DeployResponse {
+	bool success = 1; // Successful or Not (If is then we know machine is on) Q: Can a machine be running if nothing is being deployed on?
+	string app_workload_id = 2; // Application being deployed (Hash)
+	float cpu_amt_used = 3;
+	float gb_mem_amt_used = 4;
+	string deploy_status = 5; // Status of deployement of application
+
+}
+
+message UndeployRequest {
+	string app_workload_id = 1; // For undeploying a specific application within the machine.
+}
+
+message UndeployResponse {
+	bool success = 1;
+	float freed_gb_app = 2; // Should be the GB amount reserved for prev. deployed application.
+	float cpu_used_app = 3; // Same for CPU reserved from prev. deployment
+	float available_gb_machine = 4;
+	float available_cores_machine = 5;
+}
+
+message MachineInfoResponse { // Derived from psutil github repo
+	MachineState machine_state = 1;
+  float total_gb_used = 2;
+  float available_gb_machine = 3;
+  int32 total_cpu_cores = 4;
+  float available_cores_machine = 5;
+  repeated RunningWorkload app_workloads = 6; // Questionable but could a machine run multiple workloads, if so maybe this could be a useful things to get back.
+
+}
+
+message RunningWorkload { // Information on a Given Workload being utilized on a machine for agent to know
+	string app_workload_id = 1;
+	float gb_used_workload = 2;
+	float cpu_used_workload = 3;
+	WorkloadState status_app_workload = 4; // If deployed app is running, stopped, or done 
+	// Q: Maybe might assume that if no workloads/apps on a machine then Machine is OFF else ON
+}
+
+message PowerOnRequest {} // Dont need to request for machine to turn on (Machine just turns on)
+
+message PowerOnResponse {
+	bool acceptance = 1;
+	MachineState machine_state = 2; // Should be ON if machine connected and on or ERROR if something happened
+}
+
+message PowerOffRequest {} // Maybe need a field if want to force off machine
+
+message PowerOffResponse {
+	bool acceptance = 1;
+	MachineState machine_state = 2; // Should be OFF if machine connected and on or ERROR if something happened
+}
