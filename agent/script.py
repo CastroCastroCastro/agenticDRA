@@ -7,6 +7,13 @@ import os
 import socket
 import threading
 from collections.abc import Mapping
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Load .env from project root (parent of agent/) so METADATA_DB_URL is set
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
 from typing import Any
 from urllib.parse import urlparse
 
@@ -14,7 +21,6 @@ from database.postgres import DEFAULT_POSTGRES_DSN, read_rows_from_postgres
 
 
 DEFAULT_TIMEOUT_SECONDS = 1.0
-METADATA_DB_URL_ENV_VAR = "METADATA_DB_URL"
 
 IN_USE_FIELD = "In-use"
 REQUIRED_MACHINE_FIELDS = {"IP", "Ports", "cores", "memory_gb", IN_USE_FIELD}
@@ -49,7 +55,7 @@ class Script:
         2) ``METADATA_DB_URL`` env var
         3) default PostgreSQL DSN
         """
-        configured_url = metadata_db_url or os.environ.get(METADATA_DB_URL_ENV_VAR)
+        configured_url = metadata_db_url or os.environ.get("METADATA_DB_URL")
         resolved_url = configured_url or DEFAULT_POSTGRES_DSN
         parsed = urlparse(resolved_url)
         if parsed.scheme not in ("postgresql", "postgres"):

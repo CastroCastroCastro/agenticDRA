@@ -1,6 +1,10 @@
 # PostgreSQL for agent machine metadata (global state).
 # Start: docker compose up -d
 # Stop:  docker compose down
+#
+# If port 5432 is already in use (e.g. local Postgres), set before starting:
+#   POSTGRES_HOST_PORT=5433 docker compose up -d
+# Then use METADATA_DB_URL=postgresql://postgres:postgres@localhost:5433/machines_db
 
 services:
   postgres:
@@ -12,7 +16,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: machines_db
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - agentic-postgres-data:/var/lib/postgresql/data
 
