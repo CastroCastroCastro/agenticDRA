@@ -1,4 +1,5 @@
 # Project dependencies (agent uses PostgreSQL via psycopg)
 psycopg[binary]==3.3.*
 python-dotenv>=1.0.0
-grpcio>=1.70.0
+grpcio>=1.78.0
+grpcio-tools>=1.78.0
