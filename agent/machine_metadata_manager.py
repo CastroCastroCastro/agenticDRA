@@ -54,6 +54,21 @@ class MachineMetadataManager:
                 for name, details in self._machines_dict().items()
                 if details.get("memory_gb", 0) > 0 and not details.get(IN_USE_FIELD, False)
             }
+    
+    def poll_machines(self) -> MachinesMap:
+        """Refresh in-memory machine cache from PostgreSQL and return it."""
+        with self._lock:
+            # Keep the source-of-truth map in sync with SQL before any connect attempt.
+            self.machines = self._read_machines()
+            self._machines_by_name = self._parse_machines(self.machines)
+            return dict(self._machines_by_name)
+    
+    def get_available_machines(self, *, poll: bool = True) -> MachinesMap:
+        """Get currently available machines, optionally polling SQL first."""
+        if poll:
+            # Poll-on-read ensures callers use fresh machine availability data.
+            self.poll_machines()
+        return self._get_available_machines()
             
     
     def _rows_to_machines(self, rows: list[tuple[Any, ...]]) -> MachinesMap:

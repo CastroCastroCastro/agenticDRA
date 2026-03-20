@@ -59,6 +59,24 @@ class TestMachineMetadataManager(unittest.TestCase):
     def test_parse_ports_rejects_non_int_list(self):
         with self.assertRaisesRegex(ValueError, "invalid 'Ports' value"):
             self.manager._parse_ports("machine-x", ["5432"])
+    
+    def test_get_available_machines_can_poll(self):
+        # Verifies get_available_machines(poll=True) triggers a fresh SQL read.
+        class PollingManager(self.Manager):
+            def __init__(self):
+                self.read_calls = 0
+                super().__init__()
+            
+            def _read_rows_from_postgres(self, select_sql):
+                self.read_calls += 1
+                return [
+                    ("machine-z", "127.0.0.9", [7000], 8, 32, False),
+                ]
+        
+        manager = PollingManager()
+        available = manager.get_available_machines(poll=True)
+        self.assertEqual(manager.read_calls, 2)
+        self.assertEqual(list(available.keys()), ["machine-z"])
 
     def test_validate_machine_details_missing_field_raises(self):
         with self.assertRaisesRegex(ValueError, "missing fields"):
@@ -145,6 +163,44 @@ class TestRPCServer(unittest.TestCase):
                 server.connect_to_machine("machine-b", [5000, 6000], timeout=0.01)
         finally:
             _socket.gethostbyname = original_gethostbyname
+    
+    def test_connect_to_machine_from_metadata_uses_ip_and_ports(self):
+        from agent.rpc_server import RPCServer
+        
+        server = RPCServer()
+        # Isolate this test to metadata parsing/forwarding only.
+        server.connect_to_ip = lambda ip, ports, timeout=1.0: (ip, ports, timeout)  # type: ignore[assignment]
+        
+        client = server.connect_to_machine_from_metadata(
+            "machine-a",
+            {"IP": "10.0.0.10", "Ports": [5000, 6000], "In-use": False},
+            timeout=0.25,
+        )
+        self.assertEqual(client, ("10.0.0.10", [5000, 6000], 0.25))
+    
+    def test_connect_to_available_machine_polls_and_skips_unreachable(self):
+        from agent.rpc_server import RPCServer
+        
+        class StubMetadataManager:
+            # Return two candidates so we can verify failover behavior.
+            def get_available_machines(self, poll=True):
+                return {
+                    "bad-machine": {"IP": "10.0.0.11", "Ports": [5001], "In-use": False},
+                    "good-machine": {"IP": "10.0.0.12", "Ports": [5002], "In-use": False},
+                }
+        
+        server = RPCServer()
+        
+        def fake_connect(machine_name, details, timeout=1.0):
+            if machine_name == "bad-machine":
+                raise ConnectionError("unreachable")
+            return {"connected_to": machine_name}
+        
+        server.connect_to_machine_from_metadata = fake_connect  # type: ignore[assignment]
+        
+        name, client = server.connect_to_available_machine(StubMetadataManager(), timeout=0.5)
+        self.assertEqual(name, "good-machine")
+        self.assertEqual(client, {"connected_to": "good-machine"})
 
 
 if __name__ == "__main__":
