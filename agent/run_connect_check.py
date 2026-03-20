@@ -1,7 +1,4 @@
-"""Quick SQL->machineMap->RPC connectivity check. FOR TESTING RPC CONNECTIONS SERVER ONLY"""
-
-'''python3 agent/run_connect_check.py --loop # command to run continuously
-'''
+"""Quick SQL->machineMap->RPC connectivity check."""
 
 from __future__ import annotations
 
@@ -14,10 +11,6 @@ from pathlib import Path
 if __package__ is None or __package__ == "":
     # Allow running as `python3 agent/run_connect_check.py` from repo root.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from agent.machine_metadata_manager import MachineMetadataManager
-from agent.rpc_server import RPCServer
-
 
 DEFAULT_DSN = "postgresql://postgres:postgres@localhost:5432/machines_db"
 
@@ -45,6 +38,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _check_once(dsn: str, timeout: float) -> tuple[bool, str]:
+    from agent.machine_metadata_manager import MachineMetadataManager
+    from agent.rpc_server import RPCServer
+
     try:
         # Recreate manager each run so loop mode always polls the latest SQL state.
         metadata_manager = MachineMetadataManager(dsn)
