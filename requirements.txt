@@ -2,4 +2,5 @@
 psycopg[binary]==3.3.*
 python-dotenv>=1.0.0
 grpcio>=1.78.0
-grpcio-tools>=1.78.0
+openai>=1.50.0
+psutil>=6.0.0

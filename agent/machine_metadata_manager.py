@@ -15,7 +15,7 @@ MachinesMap = dict[str, MachineDetails]
 SELECT_MACHINES_SQL = """
 SELECT machine_name, IP, Ports, cores, memory_gb, in_use
 FROM machines
-ORDER BY machine_name
+ORDER BY memory_gb DESC, machine_name ASC
 """
 
 

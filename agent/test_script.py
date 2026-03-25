@@ -91,25 +91,32 @@ class TestMachineMetadataManager(unittest.TestCase):
                 },
             )
 
+    def test_select_machines_sql_orders_by_memory_gb(self):
+        from agent.machine_metadata_manager import SELECT_MACHINES_SQL
 
-class TestRPCServer(unittest.TestCase):
-    def test_create_rpc_method_returns_first_open_port(self):
-        from agent.rpc_server import RPCServer
+        lowered = SELECT_MACHINES_SQL.lower()
+        self.assertIn("order by memory_gb desc", lowered)
+        self.assertIn("machine_name", lowered)
 
-        server = RPCServer()
+
+class TestDRAClient(unittest.TestCase):
+    def test_first_open_port_returns_first_listening(self):
+        from agent.rpc_client import DRAClient
+
+        dra = DRAClient()
 
         def fake_is_port_open(ip, port, timeout):
             return port == 5000
 
-        server._is_port_open = fake_is_port_open  # type: ignore[attr-defined]
+        dra._is_port_open = fake_is_port_open  # type: ignore[attr-defined]
 
-        target = server._create_rpc_method("127.0.0.1", [4102, 5000, 6000], timeout=0.01)
-        self.assertEqual(target, {"ip": "127.0.0.1", "port": 5000})
+        port = dra._first_open_port("127.0.0.1", [4102, 5000, 6000], timeout=0.01)
+        self.assertEqual(port, 5000)
 
     def test_connect_to_machine_returns_client_for_first_open_port(self):
-        from agent.rpc_server import RPCServer
+        from agent.rpc_client import DRAClient
 
-        server = RPCServer()
+        dra = DRAClient()
 
         # Mock channel creation so tests don't create real gRPC channel objects.
         import grpc as _grpc
@@ -134,9 +141,9 @@ class TestRPCServer(unittest.TestCase):
         _socket.gethostbyname = lambda _: "10.0.0.5"  # type: ignore[assignment]
         try:
             # Stub port probing: only 6000 is open
-            server._is_port_open = lambda ip, port, timeout: port == 6000  # type: ignore[attr-defined]
+            dra._is_port_open = lambda ip, port, timeout: port == 6000  # type: ignore[attr-defined]
 
-            client = server.connect_to_machine("machine-a", [5000, 6000], timeout=0.01)
+            client = dra.connect_to_machine("machine-a", [5000, 6000], timeout=0.01)
             self.assertEqual(client.ip, "10.0.0.5")
             self.assertEqual(client.port, 6000)
             insecure_channel_mock.assert_called_once_with("10.0.0.5:6000")
@@ -148,30 +155,30 @@ class TestRPCServer(unittest.TestCase):
             _grpc.channel_ready_future = original_channel_ready_future
 
     def test_connect_to_machine_raises_when_no_ports_open(self):
-        from agent.rpc_server import RPCServer
+        from agent.rpc_client import DRAClient
 
-        server = RPCServer()
+        dra = DRAClient()
 
         import socket as _socket
 
         original_gethostbyname = _socket.gethostbyname
         _socket.gethostbyname = lambda _: "10.0.0.6"  # type: ignore[assignment]
         try:
-            server._is_port_open = lambda ip, port, timeout: False  # type: ignore[attr-defined]
+            dra._is_port_open = lambda ip, port, timeout: False  # type: ignore[attr-defined]
 
             with self.assertRaisesRegex(ConnectionError, "Could not connect"):
-                server.connect_to_machine("machine-b", [5000, 6000], timeout=0.01)
+                dra.connect_to_machine("machine-b", [5000, 6000], timeout=0.01)
         finally:
             _socket.gethostbyname = original_gethostbyname
     
     def test_connect_to_machine_from_metadata_uses_ip_and_ports(self):
-        from agent.rpc_server import RPCServer
-        
-        server = RPCServer()
+        from agent.rpc_client import DRAClient
+
+        dra = DRAClient()
         # Isolate this test to metadata parsing/forwarding only.
-        server.connect_to_ip = lambda ip, ports, timeout=1.0: (ip, ports, timeout)  # type: ignore[assignment]
-        
-        client = server.connect_to_machine_from_metadata(
+        dra.connect_to_ip = lambda ip, ports, timeout=1.0: (ip, ports, timeout)  # type: ignore[assignment]
+
+        client = dra.connect_to_machine_from_metadata(
             "machine-a",
             {"IP": "10.0.0.10", "Ports": [5000, 6000], "In-use": False},
             timeout=0.25,
@@ -179,8 +186,8 @@ class TestRPCServer(unittest.TestCase):
         self.assertEqual(client, ("10.0.0.10", [5000, 6000], 0.25))
     
     def test_connect_to_available_machine_polls_and_skips_unreachable(self):
-        from agent.rpc_server import RPCServer
-        
+        from agent.rpc_client import DRAClient
+
         class StubMetadataManager:
             # Return two candidates so we can verify failover behavior.
             def get_available_machines(self, poll=True):
@@ -188,19 +195,217 @@ class TestRPCServer(unittest.TestCase):
                     "bad-machine": {"IP": "10.0.0.11", "Ports": [5001], "In-use": False},
                     "good-machine": {"IP": "10.0.0.12", "Ports": [5002], "In-use": False},
                 }
-        
-        server = RPCServer()
-        
+
+        dra = DRAClient()
+
         def fake_connect(machine_name, details, timeout=1.0):
             if machine_name == "bad-machine":
                 raise ConnectionError("unreachable")
             return {"connected_to": machine_name}
-        
-        server.connect_to_machine_from_metadata = fake_connect  # type: ignore[assignment]
-        
-        name, client = server.connect_to_available_machine(StubMetadataManager(), timeout=0.5)
+
+        dra.connect_to_machine_from_metadata = fake_connect  # type: ignore[assignment]
+
+        name, client = dra.connect_to_available_machine(StubMetadataManager(), timeout=0.5)
         self.assertEqual(name, "good-machine")
         self.assertEqual(client, {"connected_to": "good-machine"})
+
+    def test_each_machine_stats_connects_calls_stats_closes(self):
+        from unittest.mock import Mock
+
+        from agent.rpc_client import DRAClient, MachineStatsRow
+
+        class StubMetadataManager:
+            def get_available_machines(self, poll=True):
+                return {
+                    "m1": {"IP": "10.0.0.1", "Ports": [1], "In-use": False},
+                }
+
+        dra = DRAClient()
+
+        mock_client = Mock()
+        mock_client.get_machine_stats = Mock(return_value="stats-payload")
+        mock_client.close = Mock()
+        dra.connect_to_machine_from_metadata = Mock(return_value=mock_client)  # type: ignore[method-assign]
+
+        rows = list(dra.each_machine_stats(StubMetadataManager(), timeout=0.5))
+        self.assertEqual(rows, [MachineStatsRow("m1", "stats-payload", None)])
+        mock_client.get_machine_stats.assert_called_once_with(timeout=0.5)
+        mock_client.close.assert_called_once_with()
+
+    def test_each_machine_stats_closes_when_get_machine_stats_fails(self):
+        from unittest.mock import Mock
+
+        from agent.rpc_client import DRAClient
+
+        class StubMetadataManager:
+            def get_available_machines(self, poll=True):
+                return {
+                    "m1": {"IP": "10.0.0.1", "Ports": [1], "In-use": False},
+                }
+
+        dra = DRAClient()
+        mock_client = Mock()
+        mock_client.get_machine_stats = Mock(side_effect=RuntimeError("rpc failed"))
+        mock_client.close = Mock()
+        dra.connect_to_machine_from_metadata = Mock(return_value=mock_client)  # type: ignore[method-assign]
+
+        rows = list(dra.each_machine_stats(StubMetadataManager(), timeout=0.5))
+        self.assertEqual(len(rows), 1)
+        self.assertIsNone(rows[0].stats)
+        self.assertIn("RuntimeError", rows[0].error or "")
+        mock_client.close.assert_called_once_with()
+
+    def test_each_machine_stats_yields_error_when_connect_fails(self):
+        from unittest.mock import Mock
+
+        from agent.rpc_client import DRAClient
+
+        class StubMetadataManager:
+            def get_available_machines(self, poll=True):
+                return {
+                    "m1": {"IP": "10.0.0.1", "Ports": [1], "In-use": False},
+                }
+
+        dra = DRAClient()
+        dra.connect_to_machine_from_metadata = Mock(side_effect=ConnectionError("down"))  # type: ignore[method-assign]
+
+        rows = list(dra.each_machine_stats(StubMetadataManager(), timeout=0.5))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].machine_name, "m1")
+        self.assertIsNone(rows[0].stats)
+        self.assertIn("ConnectionError", rows[0].error or "")
+
+
+class TestOpenAIMachineSelect(unittest.TestCase):
+    def test_select_machine_name_openai_parses_json(self):
+        from unittest.mock import Mock
+
+        from agent.openai_machine_select import select_machine_name_openai
+
+        machines = {
+            "a": {"IP": "10.0.0.1", "Ports": [1], "cores": 4, "memory_gb": 8, "In-use": False},
+            "b": {"IP": "10.0.0.2", "Ports": [2], "cores": 8, "memory_gb": 32, "In-use": False},
+        }
+        fake_resp = Mock()
+        fake_resp.choices = [
+            Mock(
+                message=Mock(
+                    content='{"machine_name": "b", "reason": "more RAM"}',
+                )
+            )
+        ]
+        oa = Mock()
+        oa.chat.completions.create = Mock(return_value=fake_resp)
+
+        name, reason = select_machine_name_openai(
+            machines,
+            user_instruction="pick highest memory",
+            model="gpt-test",
+            openai_client=oa,
+        )
+        self.assertEqual(name, "b")
+        self.assertIn("RAM", reason)
+        oa.chat.completions.create.assert_called_once()
+        call_kw = oa.chat.completions.create.call_args.kwargs
+        self.assertEqual(call_kw["model"], "gpt-test")
+        self.assertEqual(call_kw["response_format"], {"type": "json_object"})
+
+    def test_select_machine_name_openai_rejects_unknown_name(self):
+        from unittest.mock import Mock
+
+        from agent.openai_machine_select import select_machine_name_openai
+
+        machines = {"only": {"IP": "1.1.1.1", "Ports": [1], "cores": 1, "memory_gb": 1, "In-use": False}}
+        fake_resp = Mock()
+        fake_resp.choices = [Mock(message=Mock(content='{"machine_name": "ghost", "reason": "x"}'))]
+        oa = Mock()
+        oa.chat.completions.create = Mock(return_value=fake_resp)
+
+        with self.assertRaisesRegex(ValueError, "not in candidates"):
+            select_machine_name_openai(
+                machines,
+                openai_client=oa,
+                model="gpt-test",
+            )
+
+    def test_connect_with_openai_selection_uses_chosen_machine(self):
+        from unittest.mock import Mock
+
+        from agent.openai_machine_select import connect_with_openai_selection
+        from agent.rpc_client import DRAClient
+
+        class Mgr:
+            def get_available_machines(self, poll=True):
+                return {
+                    "m1": {"IP": "10.0.0.5", "Ports": [7000], "cores": 2, "memory_gb": 4, "In-use": False},
+                }
+
+        oa = Mock()
+        oa.chat.completions.create = Mock(
+            return_value=Mock(
+                choices=[Mock(message=Mock(content='{"machine_name": "m1", "reason": "only option"}'))]
+            )
+        )
+        dra = DRAClient()
+        fake_mc = object()
+        dra.connect_to_machine_from_metadata = Mock(return_value=fake_mc)  # type: ignore[method-assign]
+
+        name, client, reason = connect_with_openai_selection(
+            Mgr(),
+            dra=dra,
+            openai_client=oa,
+            model="gpt-test",
+            timeout=0.1,
+        )
+        self.assertEqual(name, "m1")
+        self.assertIs(client, fake_mc)
+        self.assertIn("only", reason)
+        dra.connect_to_machine_from_metadata.assert_called_once()
+        self.assertEqual(dra.connect_to_machine_from_metadata.call_args[0][0], "m1")
+
+    def test_connect_with_openai_retries_after_connect_failure(self):
+        from unittest.mock import Mock
+
+        from agent.openai_machine_select import connect_with_openai_selection
+        from agent.rpc_client import DRAClient
+
+        class Mgr:
+            def get_available_machines(self, poll=True):
+                return {
+                    "bad": {"IP": "10.0.0.1", "Ports": [1], "cores": 1, "memory_gb": 1, "In-use": False},
+                    "good": {"IP": "10.0.0.2", "Ports": [2], "cores": 2, "memory_gb": 8, "In-use": False},
+                }
+
+        oa = Mock()
+        r1 = Mock(
+            choices=[Mock(message=Mock(content='{"machine_name": "bad", "reason": "first"}'))]
+        )
+        r2 = Mock(
+            choices=[Mock(message=Mock(content='{"machine_name": "good", "reason": "second"}'))]
+        )
+        oa.chat.completions.create = Mock(side_effect=[r1, r2])
+
+        dra = DRAClient()
+
+        def connect_side_effect(name, details, timeout=1.0):
+            if name == "bad":
+                raise ConnectionError("unreachable")
+            return f"client-{name}"
+
+        dra.connect_to_machine_from_metadata = connect_side_effect  # type: ignore[method-assign]
+
+        name, client, reason = connect_with_openai_selection(
+            Mgr(),
+            dra=dra,
+            openai_client=oa,
+            model="gpt-test",
+            max_connect_retries=4,
+        )
+        self.assertEqual(name, "good")
+        self.assertEqual(client, "client-good")
+        self.assertEqual(oa.chat.completions.create.call_count, 2)
+        self.assertIn("second", reason)
+        self.assertIn("attempt 2", reason)
 
 
 if __name__ == "__main__":

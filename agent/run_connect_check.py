@@ -1,86 +1,36 @@
-"""Quick SQL->machineMap->RPC connectivity check."""
+"""One-shot check: Postgres machine list → first reachable gRPC target."""
 
 from __future__ import annotations
 
-import argparse
 import os
 import sys
-import time
 from pathlib import Path
 
 if __package__ is None or __package__ == "":
-    # Allow running as `python3 agent/run_connect_check.py` from repo root.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-DEFAULT_DSN = "postgresql://postgres:postgres@localhost:5432/machines_db"
-
-
-def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="SQL->machineMap->RPC connectivity check")
-    parser.add_argument(
-        "--loop",
-        action="store_true",
-        help="Run continuously instead of one-shot",
-    )
-    parser.add_argument(
-        "--interval",
-        type=float,
-        default=2.0,
-        help="Seconds between loop checks (default: 2.0)",
-    )
-    parser.add_argument(
-        "--max-iterations",
-        type=int,
-        default=0,
-        help="Stop after N iterations in loop mode (0 means infinite)",
-    )
-    return parser
-
-
-def _check_once(dsn: str, timeout: float) -> tuple[bool, str]:
-    from agent.machine_metadata_manager import MachineMetadataManager
-    from agent.rpc_server import RPCServer
-
-    try:
-        # Recreate manager each run so loop mode always polls the latest SQL state.
-        metadata_manager = MachineMetadataManager(dsn)
-        rpc_server = RPCServer()
-        machine_name, client = rpc_server.connect_to_available_machine(
-            metadata_manager,
-            timeout=timeout,
-        )
-    except Exception as exc:  # pragma: no cover - helper script error path
-        return False, f"CONNECT_FAILED: {type(exc).__name__}: {exc}"
-
-    return True, f"CONNECTED: {machine_name} {client.ip}:{client.port}"
+from agent.env import get_metadata_dsn
 
 
 def main() -> int:
-    args = _build_parser().parse_args()
-    dsn = os.environ.get("METADATA_DB_URL", DEFAULT_DSN)
-    timeout_value = os.environ.get("CONNECT_TIMEOUT_SECONDS", "2.0")
-
+    dsn = get_metadata_dsn()
     try:
-        timeout = float(timeout_value)
+        timeout = float(os.environ.get("CONNECT_TIMEOUT_SECONDS", "2.0"))
     except ValueError:
-        print(f"Invalid CONNECT_TIMEOUT_SECONDS value: {timeout_value}")
+        print("Invalid CONNECT_TIMEOUT_SECONDS")
         return 2
 
-    if not args.loop:
-        ok, message = _check_once(dsn, timeout)
-        print(message)
-        return 0 if ok else 1
+    from agent.machine_metadata_manager import MachineMetadataManager
+    from agent.rpc_client import DRAClient
 
-    iteration = 0
-    while True:
-        iteration += 1
-        # Each iteration performs one full SQL->map->RPC connection attempt.
-        ok, message = _check_once(dsn, timeout)
-        print(f"[{iteration}] {message}", flush=True)
-        if args.max_iterations > 0 and iteration >= args.max_iterations:
-            return 0 if ok else 1
-        time.sleep(max(args.interval, 0.1))
+    try:
+        manager = MachineMetadataManager(dsn)
+        name, client = DRAClient().connect_to_available_machine(manager, timeout=timeout)
+    except Exception as exc:
+        print(f"CONNECT_FAILED: {type(exc).__name__}: {exc}")
+        return 1
 
+    print(f"CONNECTED: {name} {client.ip}:{client.port}")
     return 0
 
 

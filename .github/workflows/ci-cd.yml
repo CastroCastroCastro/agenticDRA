@@ -23,7 +23,7 @@ jobs:
         run: pip install ruff
 
       - name: Run linter
-        run: ruff check agent/
+        run: ruff check agent/ dra_layer/connection_to_machine/grpc_service.py
 
   security-scan:
     runs-on: ubuntu-latest
@@ -58,6 +58,8 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Run tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}
         run: python -m unittest discover -s agent -v
 
 
